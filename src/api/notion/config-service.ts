@@ -4,6 +4,8 @@
  */
 
 import axios from "axios";
+import { NOTION_VERSION } from "../../config/constants";
+import { getDataSourceId } from "./services";
 import {
   LibraryConfig,
   ConfigDatabaseResponse,
@@ -20,9 +22,12 @@ export async function loadLibraryConfig(
   try {
     console.log("正在读取图书馆配置...");
 
+    // 获取 data_source_id
+    const dataSourceId = await getDataSourceId(apiKey, configDatabaseId);
+
     // 查询配置数据库，查找名称为"同步配置"的页面
     const response = await axios.post(
-      `https://api.notion.com/v1/databases/${configDatabaseId}/query`,
+      `https://api.notion.com/v1/data_sources/${dataSourceId}/query`,
       {
         filter: {
           property: "名称",
@@ -35,7 +40,7 @@ export async function loadLibraryConfig(
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "Notion-Version": "2022-06-28",
+          "Notion-Version": NOTION_VERSION,
         },
       }
     );
@@ -161,8 +166,11 @@ export async function checkSyncConfigExists(
   configDatabaseId: string
 ): Promise<boolean> {
   try {
+    // 获取 data_source_id
+    const dataSourceId = await getDataSourceId(apiKey, configDatabaseId);
+
     const response = await axios.post(
-      `https://api.notion.com/v1/databases/${configDatabaseId}/query`,
+      `https://api.notion.com/v1/data_sources/${dataSourceId}/query`,
       {
         filter: {
           property: "名称",
@@ -175,7 +183,7 @@ export async function checkSyncConfigExists(
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "Notion-Version": "2022-06-28",
+          "Notion-Version": NOTION_VERSION,
         },
       }
     );

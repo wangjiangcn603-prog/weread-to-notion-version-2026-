@@ -11,8 +11,10 @@ import {
   getBookInfo,
 } from "../../api/weread/services";
 import {
-  checkBookExistsInNotion,
   writeBookToNotion,
+  getAllBooksInNotion,
+  archivePage,
+  updateBookProperties,
 } from "../../api/notion/services";
 
 /**
@@ -40,7 +42,46 @@ export async function syncAllBooks(
       notebookBooks
     );
 
-    console.log(`\n准备同步 ${mergedBooks.length} 本书到Notion...`);
+    // 过滤出有划线的书籍
+    const booksToSync = mergedBooks.filter((book) => book.hasHighlights);
+    console.log(
+      `\n过滤后共有 ${booksToSync.length} 本有划线的书籍需要同步（已忽略无划线书籍）`
+    );
+
+    console.log(`\n准备同步 ${booksToSync.length} 本书到Notion...`);
+
+    // --- 1. 获取Notion现有书籍并构建映射 ---
+    console.log("正在获取Notion中的书籍列表...");
+    const notionBooks = await getAllBooksInNotion(apiKey, databaseId);
+
+    // 构建映射: "标题|作者" -> PageID
+    const notionBookMap = new Map<string, string>();
+    for (const nb of notionBooks) {
+      notionBookMap.set(`${nb.title}|${nb.author}`, nb.id);
+    }
+
+    // --- 2. 处理删除逻辑 ---
+    console.log("正在检查是否有需要删除的书籍...");
+    const weReadBookKeys = new Set(
+      booksToSync.map((b) => `${b.title}|${b.author || "未知作者"}`)
+    );
+
+    let deletedCount = 0;
+    for (const notionBook of notionBooks) {
+      const key = `${notionBook.title}|${notionBook.author}`;
+      if (!weReadBookKeys.has(key)) {
+        console.log(
+          `书籍《${notionBook.title}》在微信读书中已不存在或无划线，准备从Notion中删除...`
+        );
+        const archived = await archivePage(apiKey, notionBook.id);
+        if (archived) deletedCount++;
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`已删除 ${deletedCount} 本不再存在或无划线的书籍`);
+    } else {
+      console.log("没有发现需要删除的书籍");
+    }
 
     // 同步结果统计
     let successCount = 0;
@@ -48,40 +89,43 @@ export async function syncAllBooks(
     let skippedCount = 0;
 
     // 遍历所有书籍并同步
-    for (let i = 0; i < mergedBooks.length; i++) {
-      const book = mergedBooks[i];
+    for (let i = 0; i < booksToSync.length; i++) {
+      const book = booksToSync[i];
       console.log(
-        `\n[${i + 1}/${mergedBooks.length}] 同步《${book.title}》...`
+        `\n[${i + 1}/${booksToSync.length}] 同步《${book.title}》...`
       );
-      // 检查书籍是否已存在于Notion
-      const { exists, pageId: existingPageId } = await checkBookExistsInNotion(
-        apiKey,
-        databaseId,
-        book.title,
-        book.author
-      );
+
+      // 检查书籍是否已存在于Notion (使用本地映射，减少API调用)
+      const key = `${book.title}|${book.author || "未知作者"}`;
+      const existingPageId = notionBookMap.get(key);
+      const exists = !!existingPageId;
 
       let finalPageId: string;
 
+      // 获取书籍详细信息（无论是否存在都需要，用于更新属性）
+      console.log(`获取《${book.title}》的详细信息...`);
+      const detailedBookInfo = await getBookInfo(cookie, book.bookId);
+
+      // 合并详细信息到书籍数据中
+      const enhancedBook = {
+        ...book,
+        // 优先使用详细API返回的信息
+        isbn: detailedBookInfo?.isbn || book.isbn || "",
+        publisher: detailedBookInfo?.publisher || book.publisher || "",
+        // 其他可能的详细信息也可以在这里添加
+        intro: detailedBookInfo?.intro || book.intro || "",
+        publishTime: detailedBookInfo?.publishTime || book.publishTime || "",
+        // 确保阅读进度数据是最新的
+        finishReading: detailedBookInfo?.finishReading || book.finishReading,
+      };
+
       if (exists && existingPageId) {
-        console.log(`《${book.title}》已存在于Notion，将更新现有记录`);
+        console.log(
+          `《${book.title}》已存在于Notion，将更新现有记录（包括阅读状态）`
+        );
+        await updateBookProperties(apiKey, existingPageId, enhancedBook);
         finalPageId = existingPageId;
       } else {
-        // 获取书籍详细信息（包括ISBN和出版社）
-        console.log(`获取《${book.title}》的详细信息...`);
-        const detailedBookInfo = await getBookInfo(cookie, book.bookId);
-
-        // 合并详细信息到书籍数据中
-        const enhancedBook = {
-          ...book,
-          // 优先使用详细API返回的信息
-          isbn: detailedBookInfo?.isbn || book.isbn || "",
-          publisher: detailedBookInfo?.publisher || book.publisher || "",
-          // 其他可能的详细信息也可以在这里添加
-          intro: detailedBookInfo?.intro || book.intro || "",
-          publishTime: detailedBookInfo?.publishTime || book.publishTime || "",
-        };
-
         console.log(
           `获取到ISBN: ${enhancedBook.isbn}, 出版社: ${enhancedBook.publisher}`
         );

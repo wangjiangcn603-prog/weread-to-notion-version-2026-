@@ -13,7 +13,7 @@ export const BOOK_THOUGHTS_API = `${WEREAD_BASE_URL}/web/review/list`;
 export const BOOK_PROGRESS_API = `${WEREAD_BASE_URL}/web/book/getProgress`;
 
 // Notion API 配置
-export const NOTION_VERSION = process.env.NOTION_VERSION || "2022-06-28";
+export const NOTION_VERSION = process.env.NOTION_VERSION || "2025-09-03";
 export const NOTION_API_BASE_URL = "https://api.notion.com/v1";
 
 // 同步状态路径

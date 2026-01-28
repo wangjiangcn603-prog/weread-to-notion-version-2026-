@@ -14,6 +14,55 @@ import {
   BookWriteResult,
 } from "./models";
 
+// Cache for database_id -> data_source_id mapping
+const dataSourceIdCache = new Map<string, string>();
+
+/**
+ * Resolve data_source_id from database_id
+ * Notion API version 2025-09-03 requires data_source_id for most operations
+ */
+export async function getDataSourceId(apiKey: string, databaseId: string): Promise<string> {
+  // Check cache first
+  if (dataSourceIdCache.has(databaseId)) {
+    return dataSourceIdCache.get(databaseId)!;
+  }
+
+  try {
+    console.log(`正在获取数据库 ${databaseId} 的 data_source_id...`);
+    const headers = {
+      Authorization: `Bearer ${apiKey}`,
+      "Notion-Version": NOTION_VERSION,
+      "Content-Type": "application/json",
+    };
+
+    // Call Retrieve Database API (now returns list of data sources in 2025-09-03)
+    const response = await axios.get(
+      `${NOTION_API_BASE_URL}/databases/${databaseId}`,
+      { headers }
+    );
+
+    // The response structure for 2025-09-03: { object: "list", results: [ ... ] }
+    const results = response.data.results;
+    
+    // Fallback or check if results exist
+    if (!results || results.length === 0) {
+      console.warn(`该数据库 ${databaseId} 似乎没有关联的数据源，或者API返回了非预期结构。尝试直接使用ID。`);
+      return databaseId;
+    }
+
+    // Use the first data source
+    const dataSourceId = results[0].id;
+    console.log(`获取到 data_source_id: ${dataSourceId}`);
+
+    dataSourceIdCache.set(databaseId, dataSourceId);
+    return dataSourceId;
+  } catch (error: any) {
+    console.error(`解析 database_id 失败: ${error.message}`);
+    // If it fails (e.g. 404 or permission), throw or return original
+    throw error;
+  }
+}
+
 /**
  * 检查Notion数据库是否包含所有必要的属性字段
  * @param apiKey Notion API密钥
@@ -29,6 +78,9 @@ export async function checkDatabaseProperties(
   console.log(`检查数据库属性: ${databaseId}`);
 
   try {
+    // 获取 data_source_id
+    const dataSourceId = await getDataSourceId(apiKey, databaseId);
+
     // 设置请求头
     const headers = {
       Authorization: `Bearer ${apiKey}`,
@@ -36,9 +88,9 @@ export async function checkDatabaseProperties(
       "Content-Type": "application/json",
     };
 
-    // 获取数据库信息
+    // 获取数据源信息 (Retrieve Data Source)
     const response = await axios.get(
-      `${NOTION_API_BASE_URL}/databases/${databaseId}`,
+      `${NOTION_API_BASE_URL}/data_sources/${dataSourceId}`,
       { headers }
     );
 
@@ -94,6 +146,9 @@ export async function checkBookExistsInNotion(
   try {
     console.log(`检查书籍《${bookTitle}》是否已存在于Notion数据库...`);
 
+    // 获取 data_source_id
+    const dataSourceId = await getDataSourceId(apiKey, databaseId);
+
     // 设置请求头
     const headers = getNotionHeaders(apiKey, NOTION_VERSION);
 
@@ -117,9 +172,9 @@ export async function checkBookExistsInNotion(
       },
     };
 
-    // 发送查询请求
+    // 发送查询请求 - 使用 Query Data Source API
     const response = await axios.post(
-      `${NOTION_API_BASE_URL}/databases/${databaseId}/query`,
+      `${NOTION_API_BASE_URL}/data_sources/${dataSourceId}/query`,
       queryData,
       { headers }
     );
@@ -140,200 +195,305 @@ export async function checkBookExistsInNotion(
 }
 
 /**
+ * 构建书籍页面属性
+ */
+function buildBookPageProperties(bookData: any): any {
+  // 从bookData中提取译者信息
+  const translator = bookData.translator || "";
+
+  return {
+    // 书名是title类型
+    书名: {
+      title: [
+        {
+          type: "text",
+          text: {
+            content: bookData.title,
+          },
+        },
+      ],
+    },
+    // 作者是rich_text类型
+    作者: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: bookData.author || "未知作者",
+          },
+        },
+      ],
+    },
+    // 译者是rich_text类型
+    译者: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: translator,
+          },
+        },
+      ],
+    },
+    // 类型是rich_text类型 - 修改为使用category字段
+    类型: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: bookData.category || "未知类型",
+          },
+        },
+      ],
+    },
+    // 封面是文件类型，但支持URL
+    封面: {
+      files: [
+        {
+          type: "external",
+          name: `${bookData.title}-封面`,
+          external: {
+            url: bookData.cover || "",
+          },
+        },
+      ],
+    },
+    // ISBN是rich_text类型
+    ISBN: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: bookData.isbn || "",
+          },
+        },
+      ],
+    },
+    // 出版社是rich_text类型
+    出版社: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: bookData.publisher || "",
+          },
+        },
+      ],
+    },
+    // 分类是rich_text类型
+    分类: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: bookData.category || "",
+          },
+        },
+      ],
+    },
+    // 阅读状态是select类型
+    阅读状态: {
+      select: {
+        name:
+          bookData.finishReadingStatus ||
+          (bookData.finishReading
+            ? "✅已读"
+            : bookData.progress && bookData.progress > 0
+            ? "📖在读"
+            : "📕未读"),
+      },
+    },
+    // 开始阅读日期 - 如果有startReadingTime则转换为可读日期
+    开始阅读: {
+      date: bookData.progressData?.startReadingTime
+        ? {
+            start: new Date(bookData.progressData.startReadingTime * 1000)
+              .toISOString()
+              .split("T")[0],
+          }
+        : null,
+    },
+    // 完成阅读日期 - 如果有finishTime则转换为可读日期
+    完成阅读: {
+      date: bookData.progressData?.finishTime
+        ? {
+            start: new Date(bookData.progressData.finishTime * 1000)
+              .toISOString()
+              .split("T")[0],
+          }
+        : null,
+    },
+    // 阅读总时长 - 转换为小时和分钟格式
+    阅读总时长: {
+      rich_text: [
+        {
+          type: "text",
+          text: {
+            content: bookData.progressData?.readingTime
+              ? formatReadingTime(bookData.progressData.readingTime)
+              : "未记录",
+          },
+        },
+      ],
+    },
+    // 阅读进度 - 数字类型，直接使用API返回的progress值
+    阅读进度: {
+      number: bookData.progressData?.progress || bookData.progress || 0,
+    },
+  };
+}
+
+/**
+ * 更新Notion中的书籍属性
+ */
+export async function updateBookProperties(
+  apiKey: string,
+  pageId: string,
+  bookData: any
+): Promise<boolean> {
+  try {
+    console.log(`更新书籍《${bookData.title}》的属性...`);
+    const headers = getNotionHeaders(apiKey, NOTION_VERSION);
+    const properties = buildBookPageProperties(bookData);
+
+    await axios.patch(
+      `${NOTION_API_BASE_URL}/pages/${pageId}`,
+      { properties },
+      { headers }
+    );
+    console.log(`书籍属性更新成功`);
+    return true;
+  } catch (error: any) {
+    console.error(`更新书籍属性失败: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * 将书籍数据写入Notion数据库
  */
 export async function writeBookToNotion(
   apiKey: string,
   databaseId: string,
   bookData: any
-): Promise<BookWriteResult> {
+): Promise<{ success: boolean; pageId?: string }> {
   try {
-    console.log(`\n写入书籍《${bookData.title}》到Notion...`);
-
-    // 首先检查是否已存在
-    const existCheck = await checkBookExistsInNotion(
-      apiKey,
-      databaseId,
-      bookData.title,
-      bookData.author || "未知作者"
-    );
-    if (existCheck.exists && existCheck.pageId) {
-      console.log(`书籍已存在，将使用现有页面: ${existCheck.pageId}`);
-      return { success: true, pageId: existCheck.pageId };
-    }
-
-    // 设置请求头
+    console.log(`正在写入书籍《${bookData.title}》到Notion...`);
     const headers = getNotionHeaders(apiKey, NOTION_VERSION);
 
-    // 从bookData中提取译者信息 (通常不在基本元数据中，可能需要单独处理)
-    const translator = bookData.translator || "";
+    // 获取 data_source_id
+    const dataSourceId = await getDataSourceId(apiKey, databaseId);
 
     // 构建要写入的数据
     const data = {
       parent: {
-        database_id: databaseId,
+        data_source_id: dataSourceId, // 使用 data_source_id
       },
-      properties: {
-        // 书名是title类型
-        书名: {
-          title: [
-            {
-              type: "text",
-              text: {
-                content: bookData.title,
-              },
-            },
-          ],
-        },
-        // 作者是rich_text类型
-        作者: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: bookData.author || "未知作者",
-              },
-            },
-          ],
-        },
-        // 译者是rich_text类型
-        译者: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: translator,
-              },
-            },
-          ],
-        },
-        // 类型是rich_text类型 - 修改为使用category字段
-        类型: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: bookData.category || "未知类型",
-              },
-            },
-          ],
-        },
-        // 封面是文件类型，但支持URL
-        封面: {
-          files: [
-            {
-              type: "external",
-              name: `${bookData.title}-封面`,
-              external: {
-                url: bookData.cover || "",
-              },
-            },
-          ],
-        },
-        // ISBN是rich_text类型
-        ISBN: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: bookData.isbn || "",
-              },
-            },
-          ],
-        },
-        // 出版社是rich_text类型
-        出版社: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: bookData.publisher || "",
-              },
-            },
-          ],
-        },
-        // 分类是rich_text类型
-        分类: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: bookData.category || "",
-              },
-            },
-          ],
-        },
-        // 阅读状态是select类型
-        阅读状态: {
-          select: {
-            name:
-              bookData.finishReadingStatus ||
-              (bookData.finishReading
-                ? "✅已读"
-                : bookData.progress && bookData.progress > 0
-                ? "📖在读"
-                : "📕未读"),
-          },
-        },
-        // 开始阅读日期 - 如果有startReadingTime则转换为可读日期
-        开始阅读: {
-          date: bookData.progressData?.startReadingTime
-            ? {
-                start: new Date(bookData.progressData.startReadingTime * 1000)
-                  .toISOString()
-                  .split("T")[0],
-              }
-            : null,
-        },
-        // 完成阅读日期 - 如果有finishTime则转换为可读日期
-        完成阅读: {
-          date: bookData.progressData?.finishTime
-            ? {
-                start: new Date(bookData.progressData.finishTime * 1000)
-                  .toISOString()
-                  .split("T")[0],
-              }
-            : null,
-        },
-        // 阅读总时长 - 转换为小时和分钟格式
-        阅读总时长: {
-          rich_text: [
-            {
-              type: "text",
-              text: {
-                content: bookData.progressData?.readingTime
-                  ? formatReadingTime(bookData.progressData.readingTime)
-                  : "未记录",
-              },
-            },
-          ],
-        },
-        // 阅读进度 - 数字类型，直接使用API返回的progress值
-        阅读进度: {
-          number: bookData.progressData?.progress || bookData.progress || 0,
-        },
-      },
+      properties: buildBookPageProperties(bookData),
     };
     // 发送请求创建页面
     const response = await axios.post(`${NOTION_API_BASE_URL}/pages`, data, {
       headers,
     });
 
-    console.log(`请求成功，响应状态码: ${response.status}`);
-    console.log(`新创建页面ID: ${response.data.id}`);
-
-    return { success: true, pageId: response.data.id };
-  } catch (error: unknown) {
-    const axiosError = error as AxiosError;
-    console.error("写入数据失败:", axiosError.message);
-    if (axiosError.response) {
-      console.error("响应状态:", axiosError.response.status);
-      console.error(
-        "响应数据:",
-        JSON.stringify(axiosError.response.data, null, 2)
-      );
+    if (response.data && response.data.id) {
+      console.log(`书籍《${bookData.title}》写入成功，Page ID: ${response.data.id}`);
+      return { success: true, pageId: response.data.id };
+    } else {
+      console.error(`书籍《${bookData.title}》写入失败: 未返回Page ID`);
+      return { success: false };
+    }
+  } catch (error: any) {
+    console.error(`写入书籍失败: ${error.message}`);
+    if (error.response) {
+      console.error(`响应状态: ${error.response.status}`);
+      console.error(`响应数据: ${JSON.stringify(error.response.data)}`);
     }
     return { success: false };
+  }
+}
+
+/**
+ * 获取Notion数据库中的所有书籍
+ */
+export async function getAllBooksInNotion(
+  apiKey: string,
+  databaseId: string
+): Promise<{ id: string; title: string; author: string }[]> {
+  try {
+    console.log("正在获取Notion数据库中的所有书籍...");
+    const dataSourceId = await getDataSourceId(apiKey, databaseId);
+    const headers = getNotionHeaders(apiKey, NOTION_VERSION);
+
+    const books: { id: string; title: string; author: string }[] = [];
+    let hasMore = true;
+    let startCursor: string | undefined = undefined;
+
+    while (hasMore) {
+      const response: any = await axios.post(
+        `${NOTION_API_BASE_URL}/data_sources/${dataSourceId}/query`,
+        {
+          start_cursor: startCursor,
+          page_size: 100, // 每次获取100条
+        },
+        { headers }
+      );
+
+      const results = response.data.results;
+      for (const page of results) {
+        // 提取书名
+        const titleProp = page.properties["书名"];
+        const title =
+          titleProp?.title?.map((t: any) => t.plain_text).join("") || "";
+
+        // 提取作者
+        const authorProp = page.properties["作者"];
+        const author =
+          authorProp?.rich_text?.map((t: any) => t.plain_text).join("") || "";
+
+        if (title) {
+          books.push({
+            id: page.id,
+            title,
+            author,
+          });
+        }
+      }
+
+      hasMore = response.data.has_more;
+      startCursor = response.data.next_cursor || undefined;
+    }
+
+    console.log(`Notion中共有 ${books.length} 本书`);
+    return books;
+  } catch (error: any) {
+    console.error(`获取Notion书籍列表失败: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * 归档（删除）Notion页面
+ */
+export async function archivePage(
+  apiKey: string,
+  pageId: string
+): Promise<boolean> {
+  try {
+    console.log(`正在归档（删除）页面: ${pageId}`);
+    const headers = getNotionHeaders(apiKey, NOTION_VERSION);
+
+    await axios.patch(
+      `${NOTION_API_BASE_URL}/pages/${pageId}`,
+      { archived: true },
+      { headers }
+    );
+
+    console.log("页面已归档");
+    return true;
+  } catch (error: any) {
+    console.error(`归档页面失败: ${error.message}`);
+    return false;
   }
 }
 
