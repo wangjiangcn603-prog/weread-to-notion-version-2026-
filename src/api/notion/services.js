@@ -49,18 +49,19 @@ function getDataSourceId(apiKey, databaseId) {
             };
             // Call Retrieve Database API (now returns list of data sources in 2025-09-03)
             const response = yield axios_1.default.get(`${constants_1.NOTION_API_BASE_URL}/databases/${databaseId}`, { headers });
-            // The response structure for 2025-09-03: { object: "list", results: [ ... ] }
-            const results = response.data.results;
-            // Fallback or check if results exist
-            if (!results || results.length === 0) {
-                console.warn(`该数据库 ${databaseId} 似乎没有关联的数据源，或者API返回了非预期结构。尝试直接使用ID。`);
+            // The response structure for 2025-09-03: Retrieve Database returns the database object directly
+            const dbData = response.data;
+            // Check if the response is valid (has an ID)
+            if (!dbData || !dbData.id) {
+                console.warn(`获取数据库 ${databaseId} 信息返回了非预期结构。尝试直接使用ID。`);
                 return databaseId;
             }
-            // Use the first data source
-            const dataSourceId = results[0].id;
-            console.log(`获取到 data_source_id: ${dataSourceId}`);
-            dataSourceIdCache.set(databaseId, dataSourceId);
-            return dataSourceId;
+            // In most cases for standard databases, the ID is preserved.
+            // If Notion introduces a separate data_source_id field in the future, we can check it here.
+            const finalId = dbData.id;
+            console.log(`确认数据库ID有效: ${finalId}`);
+            dataSourceIdCache.set(databaseId, finalId);
+            return finalId;
         }
         catch (error) {
             console.error(`解析 database_id 失败: ${error.message}`);
@@ -88,8 +89,12 @@ function checkDatabaseProperties(apiKey, databaseId, requiredProperties) {
                 "Notion-Version": constants_1.NOTION_VERSION,
                 "Content-Type": "application/json",
             };
-            // 获取数据源信息 (Retrieve Data Source)
-            const response = yield axios_1.default.get(`${constants_1.NOTION_API_BASE_URL}/data_sources/${dataSourceId}`, { headers });
+            // Determine endpoint
+            const endpoint = dataSourceId === databaseId
+                ? `${constants_1.NOTION_API_BASE_URL}/databases/${databaseId}`
+                : `${constants_1.NOTION_API_BASE_URL}/data_sources/${dataSourceId}`;
+            // 获取数据源信息
+            const response = yield axios_1.default.get(endpoint, { headers });
             // 数据库中存在的属性
             const existingProperties = Object.keys(response.data.properties || {});
             console.log(`数据库包含以下属性: ${existingProperties.join(", ")}`);
@@ -155,8 +160,12 @@ function checkBookExistsInNotion(apiKey, databaseId, bookTitle, bookAuthor) {
                     ],
                 },
             };
-            // 发送查询请求 - 使用 Query Data Source API
-            const response = yield axios_1.default.post(`${constants_1.NOTION_API_BASE_URL}/data_sources/${dataSourceId}/query`, queryData, { headers });
+            // Determine endpoint
+            const endpoint = dataSourceId === databaseId
+                ? `${constants_1.NOTION_API_BASE_URL}/databases/${databaseId}/query`
+                : `${constants_1.NOTION_API_BASE_URL}/data_sources/${dataSourceId}/query`;
+            // 发送查询请求
+            const response = yield axios_1.default.post(endpoint, queryData, { headers });
             const results = response.data.results;
             if (results && results.length > 0) {
                 console.log(`书籍已存在于Notion，页面ID: ${results[0].id}`);
@@ -349,10 +358,16 @@ function writeBookToNotion(apiKey, databaseId, bookData) {
             // 获取 data_source_id
             const dataSourceId = yield getDataSourceId(apiKey, databaseId);
             // 构建要写入的数据
+            const parent = {};
+            // If the resolved ID matches the input database ID, use database_id for compatibility
+            if (dataSourceId === databaseId) {
+                parent.database_id = databaseId;
+            }
+            else {
+                parent.data_source_id = dataSourceId;
+            }
             const data = {
-                parent: {
-                    data_source_id: dataSourceId, // 使用 data_source_id
-                },
+                parent,
                 properties: buildBookPageProperties(bookData),
             };
             // 发送请求创建页面
@@ -389,10 +404,14 @@ function getAllBooksInNotion(apiKey, databaseId) {
             const dataSourceId = yield getDataSourceId(apiKey, databaseId);
             const headers = (0, http_1.getNotionHeaders)(apiKey, constants_1.NOTION_VERSION);
             const books = [];
+            // Determine endpoint
+            const endpoint = dataSourceId === databaseId
+                ? `${constants_1.NOTION_API_BASE_URL}/databases/${databaseId}/query`
+                : `${constants_1.NOTION_API_BASE_URL}/data_sources/${dataSourceId}/query`;
             let hasMore = true;
             let startCursor = undefined;
             while (hasMore) {
-                const response = yield axios_1.default.post(`${constants_1.NOTION_API_BASE_URL}/data_sources/${dataSourceId}/query`, {
+                const response = yield axios_1.default.post(endpoint, {
                     start_cursor: startCursor,
                     page_size: 100, // 每次获取100条
                 }, { headers });
