@@ -41,23 +41,36 @@ export async function getDataSourceId(apiKey: string, databaseId: string): Promi
       { headers }
     );
 
-    // The response structure for 2025-09-03: Retrieve Database returns the database object directly
-    const dbData = response.data;
-    
-    // Check if the response is valid (has an ID)
-    if (!dbData || !dbData.id) {
-       console.warn(`获取数据库 ${databaseId} 信息返回了非预期结构。尝试直接使用ID。`);
-       return databaseId;
-    }
+    // Notion API 2025-09-03: Retrieve Database returns a list of data_sources
+    const data = response.data;
+    let finalId = databaseId;
 
-    // In most cases for standard databases, the ID is preserved.
-    // If Notion introduces a separate data_source_id field in the future, we can check it here.
-    const finalId = dbData.id;
-    console.log(`确认数据库ID有效: ${finalId}`);
+    if (data.object === "list" && Array.isArray(data.results)) {
+      if (data.results.length > 0) {
+        // Use the first data source found
+        finalId = data.results[0].id;
+        console.log(`成功从数据库响应中解析出 data_source_id: ${finalId}`);
+      } else {
+        console.warn(`数据库 ${databaseId} 返回了空的 data_sources 列表。`);
+      }
+    } else if (data.id) {
+      // Fallback for older versions or unexpected structure
+      finalId = data.id;
+      console.log(`响应结构为单对象，使用 ID: ${finalId}`);
+    } else {
+      console.warn(
+        `获取数据库 ${databaseId} 信息返回了非预期结构。尝试直接使用ID。`
+      );
+    }
 
     dataSourceIdCache.set(databaseId, finalId);
     return finalId;
   } catch (error: any) {
+    if (error.response && error.response.status === 404) {
+      const msg = `无法访问数据库 ${databaseId}。原因可能是：\n1. 该数据库未分享给您的 Notion Integration。\n2. 数据库 ID 错误。\n\n请在 Notion 中打开该数据库页面 -> 点击右上角"..." -> "Connect to" (或 "Connections") -> 选择您的 Integration 进行授权。`;
+      console.error(msg);
+      throw new Error(msg);
+    }
     console.error(`解析 database_id 失败: ${error.message}`);
     // If it fails (e.g. 404 or permission), throw or return original
     throw error;
