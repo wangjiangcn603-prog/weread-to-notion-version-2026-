@@ -75,7 +75,10 @@ export async function refreshSession(currentCookie: string): Promise<string> {
 /**
  * 从微信读书笔记本获取书籍列表
  */
-export async function getNotebookBooks(cookie: string): Promise<any[]> {
+export async function getNotebookBooks(
+  cookie: string,
+  isRetry: boolean = false
+): Promise<any[]> {
   console.log("\n=== 从微信读书笔记本获取书籍列表 ===");
   console.log("API URL:", NOTEBOOK_API);
 
@@ -87,10 +90,15 @@ export async function getNotebookBooks(cookie: string): Promise<any[]> {
 
     // 检查是否登录超时
     if (response.data.errCode === -2012) {
+      if (isRetry) {
+        throw new Error(
+          "登录状态已失效，自动刷新失败。请重新获取新的 Cookie 并更新配置。"
+        );
+      }
       console.log("检测到登录超时，正在重新刷新会话...");
       const newCookie = await refreshSession(cookie);
       // 重新发起请求
-      return getNotebookBooks(newCookie);
+      return getNotebookBooks(newCookie, true);
     }
 
     if (response.data.books && response.data.books.length > 0) {
@@ -118,7 +126,10 @@ export async function getNotebookBooks(cookie: string): Promise<any[]> {
 /**
  * 从微信读书书架获取书籍列表
  */
-export async function getBookshelfBooks(cookie: string): Promise<any[]> {
+export async function getBookshelfBooks(
+  cookie: string,
+  isRetry: boolean = false
+): Promise<any[]> {
   console.log("\n=== 从微信读书书架获取书籍列表 ===");
   console.log("API URL:", BOOKSHELF_URL);
 
@@ -130,10 +141,15 @@ export async function getBookshelfBooks(cookie: string): Promise<any[]> {
 
     // 检查是否登录超时
     if (response.data.errCode === -2012) {
+      if (isRetry) {
+        throw new Error(
+          "登录状态已失效，自动刷新失败。请重新获取新的 Cookie 并更新配置。"
+        );
+      }
       console.log("检测到登录超时，正在重新刷新会话...");
       const newCookie = await refreshSession(cookie);
       // 重新发起请求
-      return getBookshelfBooks(newCookie);
+      return getBookshelfBooks(newCookie, true);
     }
 
     if (response.data.books && response.data.books.length > 0) {
@@ -163,7 +179,8 @@ export async function getBookshelfBooks(cookie: string): Promise<any[]> {
  */
 export async function getBookInfo(
   cookie: string,
-  bookId: string
+  bookId: string,
+  isRetry: boolean = false
 ): Promise<any> {
   console.log(`获取书籍(ID: ${bookId})的详细信息...`);
   const url = `${BOOK_INFO_URL}?bookId=${bookId}`;
@@ -176,10 +193,15 @@ export async function getBookInfo(
 
     // 检查是否登录超时
     if (response.data.errCode === -2012) {
+      if (isRetry) {
+        throw new Error(
+          "登录状态已失效，自动刷新失败。请重新获取新的 Cookie 并更新配置。"
+        );
+      }
       console.log("检测到登录超时，正在重新刷新会话...");
       const newCookie = await refreshSession(cookie);
       // 重新发起请求
-      return getBookInfo(newCookie, bookId);
+      return getBookInfo(newCookie, bookId, true);
     }
 
     return response.data;
@@ -195,7 +217,8 @@ export async function getBookInfo(
 export async function getBookHighlights(
   cookie: string,
   bookId: string,
-  synckey: string = "0"
+  synckey: string = "0",
+  isRetry: boolean = false
 ): Promise<RawHighlightsData | null> {
   console.log(`\n获取书籍(ID: ${bookId})的划线...`);
   const url = `${BOOKMARKS_API}?bookId=${bookId}&synckey=${synckey}`;
@@ -209,10 +232,15 @@ export async function getBookHighlights(
 
     // 检查是否登录超时
     if (response.data.errCode === -2012) {
+      if (isRetry) {
+        throw new Error(
+          "登录状态已失效，自动刷新失败。请重新获取新的 Cookie 并更新配置。"
+        );
+      }
       console.log("检测到登录超时，正在重新刷新会话...");
       const newCookie = await refreshSession(cookie);
       // 重新发起请求
-      return getBookHighlights(newCookie, bookId, synckey);
+      return getBookHighlights(newCookie, bookId, synckey, true);
     }
 
     // 检查响应数据
@@ -249,7 +277,8 @@ export async function getBookHighlights(
 export async function getBookThoughts(
   cookie: string,
   bookId: string,
-  synckey: string = "0"
+  synckey: string = "0",
+  isRetry: boolean = false
 ): Promise<RawThoughtsData | null> {
   console.log(`\n获取书籍(ID: ${bookId})的想法...`);
   const url = `${BOOK_THOUGHTS_API}?bookId=${bookId}&listType=11&mine=1&synckey=${synckey}`;
@@ -263,10 +292,15 @@ export async function getBookThoughts(
 
     // 检查是否登录超时
     if (response.data.errCode === -2012) {
+      if (isRetry) {
+        throw new Error(
+          "登录状态已失效，自动刷新失败。请重新获取新的 Cookie 并更新配置。"
+        );
+      }
       console.log("检测到登录超时，正在重新刷新会话...");
       const newCookie = await refreshSession(cookie);
       // 重新发起请求
-      return getBookThoughts(newCookie, bookId, synckey);
+      return getBookThoughts(newCookie, bookId, synckey, true);
     }
 
     // 检查响应数据

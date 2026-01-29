@@ -9,7 +9,8 @@ import { refreshSession } from "./services";
 
 export async function getBookProgress(
   cookie: string,
-  bookId: string
+  bookId: string,
+  isRetry: boolean = false
 ): Promise<BookProgressInfo | null> {
   console.log(`\n获取书籍(ID: ${bookId})的阅读进度...`);
   const url = `${BOOK_PROGRESS_API}?bookId=${bookId}`;
@@ -23,10 +24,15 @@ export async function getBookProgress(
 
     // 检查是否登录超时
     if (response.data.errCode === -2012) {
+      if (isRetry) {
+        throw new Error(
+          "登录状态已失效，自动刷新失败。请重新获取新的 Cookie 并更新配置。"
+        );
+      }
       console.log("检测到登录超时，正在重新刷新会话...");
       const newCookie = await refreshSession(cookie);
       // 重新发起请求
-      return getBookProgress(newCookie, bookId);
+      return getBookProgress(newCookie, bookId, true);
     }
 
     // 检查响应数据
